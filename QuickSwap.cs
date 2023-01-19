@@ -1,89 +1,112 @@
 ﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
-using ExtendedItemDataFramework;
+using HarmonyLib;
+using System.Reflection;
+using System.Linq;
+using static ItemDrop;
 
-namespace Grisch.QuickswapArmorstand;
+namespace williammetcalf.UsefulArmorStands;
 
 public class QuickSwap
 {
-    public static List<ItemDrop> StashStandEq(ArmorStand stand)
-        {
-            List<ItemDrop> itemlist = new List<ItemDrop>();
-            for (int i = 0; i < stand.m_slots.Count; i++)
-            {
-                if (!stand.HaveAttachment(i)) continue;
 
-                string itemstring = stand.m_nview.GetZDO().GetString(i.ToString() + "_item");
-                ItemDrop itemDrop = ObjectDB.instance.GetItemPrefab(itemstring).GetComponent<ItemDrop>();
-                ItemDrop.LoadFromZDO(i, itemDrop.m_itemData, stand.m_nview.GetZDO());
-                HandleEIDF(itemDrop);
-                itemlist.Add(itemDrop);
-                stand.DestroyAttachment(i);
-                stand.m_nview.GetZDO().Set(i.ToString() + "_item", "");
-                stand.m_nview.InvokeRPC(ZNetView.Everybody, "RPC_SetVisualItem", new object[]
-                {
-                    i,
-                    "",
-                    0
-                });
-                stand.UpdateSupports();
-                stand.m_cloths = stand.GetComponentsInChildren<Cloth>();
+    public static void SwapGearWithArmorStand(ArmorStand stand, Humanoid player)
+    {
+        // 1. cache armor stand gear
+        List<ItemDrop> gearCache = CacheStandGear(stand);
+        Debug.Log("Caching " + gearCache.Count + " items from armor stand: " + gearCache.Join(i => i.m_itemData.m_shared.m_name, ", "));
+        // 2. move equipment from player to stand
+        MovePlayerGearToStand(player, stand);
+        // 3. equip cached gear from stand to player
+        EquipGearToPlayer(gearCache, player);
+    }
+
+    private static List<ItemDrop> CacheStandGear(ArmorStand stand)
+    {
+        List<ItemDrop> gearCache = new();
+        ZNetView m_nview = (ZNetView)AccessTools.Field(typeof(ArmorStand), "m_nview").GetValue(stand);
+
+        for (int i = 0; i < stand.m_slots.Count; i++)
+        {
+            if (!stand.HaveAttachment(i)) continue;
+            string itemstring = m_nview.GetZDO().GetString(i + "_item");
+            ItemDrop itemDrop = ObjectDB.instance.GetItemPrefab(itemstring).GetComponent<ItemDrop>();
+            ItemDrop.LoadFromZDO(i, itemDrop.m_itemData, m_nview.GetZDO());
+            gearCache.Add(itemDrop);
+
+            stand.DestroyAttachment(i);
+            m_nview.GetZDO().Set(i.ToString() + "_item", "");
+            m_nview.InvokeRPC(ZNetView.Everybody, "RPC_SetVisualItem", i, "", 0);
+            AccessTools.Method(typeof(ArmorStand), "UpdateSupports").Invoke(stand, new object[] { });
+            AccessTools.Field(typeof(ArmorStand), "m_cloths").SetValue(stand, stand.GetComponentsInChildren<Cloth>());
+        }
+
+        return gearCache;
+    }
+
+    private static void MovePlayerGearToStand(Humanoid player, ArmorStand stand) {
+        List<ItemData> playerGear = player.GetInventory().GetEquipedtems();
+        Debug.Log("Found " + playerGear.Count + " equiped items on player: " + playerGear.Join(i => i.m_shared.m_name, ", "));
+        ZNetView m_nview = (ZNetView)AccessTools.Field(typeof(ArmorStand), "m_nview").GetValue(stand);
+
+        playerGear.ForEach(item =>
+        {
+            string itemName = item.m_shared.m_name;
+            Debug.Log("About to attempt to put item " + itemName + " into armor stand");
+            int slot = FindEmptySlot(stand, item);
+            if (slot < 0) return;
+
+            bool canAttach = (bool)AccessTools.Method(typeof(ArmorStand), "CanAttach").Invoke(stand, new object[] { stand.m_slots[slot], item });
+            if (!canAttach || stand.HaveAttachment(slot)) throw new TargetException("Unexpected scenario!");
+            player.UnequipItem(item);
+            player.GetInventory().RemoveOneItem(item);
+            ItemData clonedItem = item.Clone();
+            m_nview.GetZDO().Set(slot + "_item", item.m_dropPrefab.name);
+            SaveToZDO(slot, clonedItem, m_nview.GetZDO());
+            m_nview.InvokeRPC(ZNetView.Everybody, "RPC_SetVisualItem", slot, clonedItem.m_dropPrefab.name, clonedItem.m_variant);
+            AccessTools.Field(typeof(ArmorStand), "m_queuedItem").SetValue(stand, null);
+        });
+    }
+
+    private static void EquipGearToPlayer(List<ItemDrop> gear, Humanoid player) {
+        Debug.Log("About to equip " + gear.Count + " cached items to player: " + gear.Join(i => i.m_itemData.m_shared.m_name, ", "));
+        gear.ForEach(item =>
+        {
+            player.GetInventory().AddItem(item.m_itemData);
+            player.EquipItem(item.m_itemData);
+        });
+    }
+
+
+
+    public static void MovePlayerEqToStand(Switch caller, ArmorStand stand, Humanoid player)
+    {
+        List<ItemDrop.ItemData> playerItems = player.GetInventory().GetEquipedtems();
+        playerItems.ForEach(item =>
+        {
+            int slot = FindEmptySlot(stand, item);
+            Switch s = stand.m_slots[slot].m_switch;
+            string original_m_name = s.m_name;
+            s.m_name += Plugin.ModGUID;
+            stand.UseItem(s, player, item);
+            s.m_name = original_m_name;
+        });
+    }
+
+    public static int FindEmptySlot(ArmorStand stand, ItemDrop.ItemData item)
+    {
+        int slot = -1;
+        for (int i = 0; i < stand.m_slots.Count; i++)
+        {
+            object[] p = new object[] { stand.m_slots[i], item };
+            bool r = (bool)AccessTools.Method(typeof(ArmorStand), "CanAttach").Invoke(stand, p);
+            if (r)
+            {
+                slot = i;
+                break;
             }
-
-            return itemlist;
         }
-
-        public static void MovePlayerEqToStand(ArmorStand stand, Humanoid player)
-        {
-            List<ItemDrop.ItemData> playerItems = new List<ItemDrop.ItemData>
-            {
-                player.m_rightItem,
-                player.m_leftItem,
-                player.m_chestItem,
-                player.m_legItem,
-                player.m_helmetItem,
-                player.m_shoulderItem
-            };
-            stand.CancelInvoke(nameof(ArmorStand.UpdateAttach));
-            foreach (ItemDrop.ItemData eq in playerItems)
-            {
-                if (eq is null) continue;
-                int slot = FindFreeSlot(stand, eq);
-                if (slot < 0) throw new IndexOutOfRangeException("This should never happen! Call a grownup!");
-                stand.m_queuedItem = eq;
-                stand.m_queuedSlot = slot;
-                stand.UpdateAttach();
-            }
-
-            stand.InvokeRepeating(nameof(ArmorStand.UpdateAttach), 0f, 0.1f);
-        }
-        
-        public static void AddEquipStandItemsFromList(List<ItemDrop> itemlist, Humanoid player)
-        {
-            foreach (ItemDrop itemdrop in itemlist)
-            {
-                player.m_inventory.AddItem(itemdrop.m_itemData);
-                player.EquipItem(itemdrop.m_itemData);
-            }
-        }
-
-        private static int FindFreeSlot(ArmorStand stand, ItemDrop.ItemData item)
-        {
-            for (int i = 0; i < stand.m_slots.Count; i++)
-            {
-                if (stand.CanAttach(stand.m_slots[i], item)) return i;
-            }
-
-            return -1;
-        }
-
-        private static void HandleEIDF(ItemDrop item)
-        {
-            ItemDrop.ItemData itemdata = item.m_itemData;
-            if (!Plugin.EIDF_Installed) return;
-            item.m_itemData = new ExtendedItemData(itemdata, itemdata.m_stack, itemdata.m_durability, new Vector2i(),
-                false,
-                itemdata.m_quality, itemdata.m_variant, itemdata.m_crafterID, itemdata.m_crafterName);
-        }
+        return slot;
+    }
 }
