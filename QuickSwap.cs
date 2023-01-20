@@ -1,10 +1,10 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEngine;
 using HarmonyLib;
 using System.Reflection;
 using System.Linq;
 using static ItemDrop;
+using static ItemDrop.ItemData;
 
 namespace williammetcalf.UsefulArmorStands;
 
@@ -13,12 +13,8 @@ public class QuickSwap
 
     public static void SwapGearWithArmorStand(ArmorStand stand, Humanoid player)
     {
-        // 1. cache armor stand gear
         List<ItemDrop> gearCache = CacheStandGear(stand);
-        Debug.Log("Caching " + gearCache.Count + " items from armor stand: " + gearCache.Join(i => i.m_itemData.m_shared.m_name, ", "));
-        // 2. move equipment from player to stand
         MovePlayerGearToStand(player, stand);
-        // 3. equip cached gear from stand to player
         EquipGearToPlayer(gearCache, player);
     }
 
@@ -32,7 +28,9 @@ public class QuickSwap
             if (!stand.HaveAttachment(i)) continue;
             string itemstring = m_nview.GetZDO().GetString(i + "_item");
             ItemDrop itemDrop = ObjectDB.instance.GetItemPrefab(itemstring).GetComponent<ItemDrop>();
-            ItemDrop.LoadFromZDO(i, itemDrop.m_itemData, m_nview.GetZDO());
+            if (!CheckItemAgainstConfig(itemDrop)) continue;
+
+            LoadFromZDO(i, itemDrop.m_itemData, m_nview.GetZDO());
             gearCache.Add(itemDrop);
 
             stand.DestroyAttachment(i);
@@ -46,14 +44,12 @@ public class QuickSwap
     }
 
     private static void MovePlayerGearToStand(Humanoid player, ArmorStand stand) {
-        List<ItemData> playerGear = player.GetInventory().GetEquipedtems();
-        Debug.Log("Found " + playerGear.Count + " equiped items on player: " + playerGear.Join(i => i.m_shared.m_name, ", "));
+        List<ItemData> playerGear = player.GetInventory().GetEquipedtems().Where(CheckItemAgainstConfig).ToList();
         ZNetView m_nview = (ZNetView)AccessTools.Field(typeof(ArmorStand), "m_nview").GetValue(stand);
 
         playerGear.ForEach(item =>
         {
             string itemName = item.m_shared.m_name;
-            Debug.Log("About to attempt to put item " + itemName + " into armor stand");
             int slot = FindEmptySlot(stand, item);
             if (slot < 0) return;
 
@@ -70,31 +66,17 @@ public class QuickSwap
     }
 
     private static void EquipGearToPlayer(List<ItemDrop> gear, Humanoid player) {
-        Debug.Log("About to equip " + gear.Count + " cached items to player: " + gear.Join(i => i.m_itemData.m_shared.m_name, ", "));
         gear.ForEach(item =>
         {
             player.GetInventory().AddItem(item.m_itemData);
-            player.EquipItem(item.m_itemData);
+            if (CheckItemAgainstConfig(item))
+            {
+                player.EquipItem(item.m_itemData);
+            }
         });
     }
 
-
-
-    public static void MovePlayerEqToStand(Switch caller, ArmorStand stand, Humanoid player)
-    {
-        List<ItemDrop.ItemData> playerItems = player.GetInventory().GetEquipedtems();
-        playerItems.ForEach(item =>
-        {
-            int slot = FindEmptySlot(stand, item);
-            Switch s = stand.m_slots[slot].m_switch;
-            string original_m_name = s.m_name;
-            s.m_name += Plugin.ModGUID;
-            stand.UseItem(s, player, item);
-            s.m_name = original_m_name;
-        });
-    }
-
-    public static int FindEmptySlot(ArmorStand stand, ItemDrop.ItemData item)
+    private static int FindEmptySlot(ArmorStand stand, ItemData item)
     {
         int slot = -1;
         for (int i = 0; i < stand.m_slots.Count; i++)
@@ -108,5 +90,35 @@ public class QuickSwap
             }
         }
         return slot;
+    }
+
+    private static bool CheckItemAgainstConfig(ItemData item) {
+        switch (item.m_shared.m_itemType)
+        {
+            case ItemType.Utility:
+                return !ArmorStandConfig.IgnoreSlotConfig.ignoreUtility.Value;
+            case ItemType.Shoulder:
+                return !ArmorStandConfig.IgnoreSlotConfig.ignoreCape.Value;
+            case ItemType.OneHandedWeapon:
+            case ItemType.TwoHandedWeapon:
+            case ItemType.Bow:
+            case ItemType.Tool:
+            case ItemType.Torch:
+                return !ArmorStandConfig.IgnoreSlotConfig.ignoreWeapon.Value;
+            case ItemType.Shield:
+                return !ArmorStandConfig.IgnoreSlotConfig.ignoreShield.Value;
+            case ItemType.Helmet:
+                return !ArmorStandConfig.IgnoreSlotConfig.ignoreHelmet.Value;
+            case ItemType.Chest:
+                return !ArmorStandConfig.IgnoreSlotConfig.ignoreBody.Value;
+            case ItemType.Legs:
+                return !ArmorStandConfig.IgnoreSlotConfig.ignorePants.Value;
+            default: return true;
+        }
+    }
+
+    private static bool CheckItemAgainstConfig(ItemDrop itemDrop)
+    {
+        return CheckItemAgainstConfig(itemDrop.m_itemData);
     }
 }
