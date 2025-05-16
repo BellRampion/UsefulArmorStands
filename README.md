@@ -4,4 +4,4 @@ This repo is a Valheim Plugin that allows you to interact with an armor stand wh
 
 There are configuration options to ignore individual item slots when performing the gear quick-swap.
 
-This repository was forked from [GrischMods/QuickswapArmorstand](https://github.com/GrischMods/QuickswapArmorstand), but almost entirely rewritten to make it work with Mistlands
+Updated by BellRampion to work with the BogWitch update. 
