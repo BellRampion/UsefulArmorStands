@@ -1,9 +1,10 @@
 ﻿
 using BepInEx.Configuration;
 
-namespace williammetcalf.UsefulArmorStands
+namespace UsefulArmorStand
 {
-    class ArmorStandConfig
+
+    public class ArmorStandConfig
     {
         public static ConfigFile Config;
 
@@ -18,7 +19,7 @@ namespace williammetcalf.UsefulArmorStands
             internal static ConfigEntry<bool> ignoreHelmet;
         }
 
-        internal static void LoadConfig(UsefulArmorStandsPlugin plugin)
+        internal static void LoadConfig(Main plugin)
         {
             Config = plugin.Config;
             string sectionName = "Ignore Individual Gear Slots";
